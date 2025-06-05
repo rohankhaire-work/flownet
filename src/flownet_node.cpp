@@ -9,8 +9,9 @@ FlowNetNode::FlowNetNode() : Node("flownet_node")
   base_frame_ = declare_parameter<std::string>("base_frame", "");
   cam_params_.network_h = declare_parameter("flow_network_height", 192);
   cam_params_.network_w = declare_parameter("flow_network_width", 640);
-  cam_params_.orig_h = declare_parameter("camera_image_height", 480);
-  cam_params_.orig_w = declare_parameter("camera_image_width", 640);
+  cam_params_.network_c = declare_parameter("flow_network_channels", 6);
+  cam_params_.orig_h = declare_parameter("original_image_height", 480);
+  cam_params_.orig_w = declare_parameter("original_image_width", 640);
 
   if(image_topic_.empty() || weight_file_.empty())
   {
@@ -25,7 +26,7 @@ FlowNetNode::FlowNetNode() : Node("flownet_node")
   timer_ = this->create_wall_timer(std::chrono::milliseconds(50),
                                    std::bind(&FlowNetNode::timerCallback, this));
 
-  flow_img_pub_ = image_transport::create_publisher(this, "/depth_image");
+  flow_img_pub_ = image_transport::create_publisher(this, "/flow_image");
 
   // Get weight paths
   std::string share_dir = ament_index_cpp::get_package_share_directory("flownet");
@@ -63,14 +64,17 @@ void FlowNetNode::imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr &m
     RCLCPP_ERROR(get_logger(), "cv_bridge error: %s", e.what());
     return;
   }
+  // Set flag for new image
+  new_image_available_ = true;
 }
 
 void FlowNetNode::timerCallback()
 {
   // Check if the image and pointcloud exists
-  if(!curr_image_.empty() && !prev_image_.empty())
+  if(!curr_image_.empty() && !prev_image_.empty() && new_image_available_)
   {
     auto start_time = std::chrono::steady_clock::now();
+
     // Run Monocular depth estimation
     flownet_->runInference(curr_image_, prev_image_);
 
@@ -86,7 +90,7 @@ void FlowNetNode::timerCallback()
 
   // Update prev image
   prev_image_ = curr_image_;
-  curr_image_ = cv::Mat();
+  new_image_available_ = false;
 }
 
 void FlowNetNode::publishImage(const image_transport::Publisher &pub)
@@ -96,7 +100,7 @@ void FlowNetNode::publishImage(const image_transport::Publisher &pub)
   std_msgs::msg::Header header;
   header.stamp = rclcpp::Clock(RCL_ROS_TIME).now();
   sensor_msgs::msg::Image::SharedPtr msg =
-    cv_bridge::CvImage(header, "rgb8", bbox_img).toImageMsg();
+    cv_bridge::CvImage(header, "bgr8", bbox_img).toImageMsg();
 
   // Publish image
   pub.publish(*msg);

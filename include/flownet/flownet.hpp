@@ -1,17 +1,21 @@
 #ifndef FLOWNET__FLOWNET_HPP_
 #define FLOWNET__FLOWNET_HPP_
 
+#include <dlfcn.h>
 #include <NvInfer.h>
+#include <NvInferPlugin.h>
 #include <cuda_runtime_api.h>
 #include <opencv2/core/matx.hpp>
 #include <opencv2/opencv.hpp>
 #include <sensor_msgs/image_encodings.hpp>
+#include <ament_index_cpp/get_package_share_directory.hpp>
 
 #include <fstream>
 #include <iostream>
 #include <spdlog/spdlog.h>
 #include <string>
 #include <vector>
+#include <span>
 
 struct CAMParams
 {
@@ -50,6 +54,8 @@ private:
   float div_flow_ = 20.0f;
   float scale_x_, scale_y_;
   std::vector<cv::Vec3i> colorwheel_;
+  std::string plugin1_file_ = "/plugins/libcorrelation_plugin.so";
+  std::string plugin2_file_ = "/plugins/libgridsampler_plugin.so";
 
   // Buffers
   void *buffers_[2];
@@ -65,7 +71,7 @@ private:
   std::vector<float> preprocessImage(const cv::Mat &);
   std::vector<float> imageToTensor(const cv::Mat &);
   std::vector<float> computeNetworkReadyInput(const cv::Mat &, const cv::Mat &);
-  void initializeTRT(const std::string &);
+  void initializeTRT(const std::string &, const std::string &, const std::string &);
   cv::Mat normalizeRGB(const cv::Mat &input);
   cv::Mat postProcessFlow(const cv::Mat &);
   std::vector<cv::Vec3i> makeColorWheel();

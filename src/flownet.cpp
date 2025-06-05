@@ -1,6 +1,6 @@
 #include "flownet/flownet.hpp"
 
-FlowNet::FlowNet(const CAMParams &cam_params, const std::string &depth_weight_file)
+FlowNet::FlowNet(const CAMParams &cam_params, const std::string &weight_file)
 {
   // Set depth img size and detection img size
   resize_h_ = cam_params.network_h;
@@ -16,16 +16,21 @@ FlowNet::FlowNet(const CAMParams &cam_params, const std::string &depth_weight_fi
   // Make colorwheel
   colorwheel_ = makeColorWheel();
 
+  // Get plugin paths
+  std::string share_dir = ament_index_cpp::get_package_share_directory("flownet");
+  std::string plugin1_path = share_dir + plugin1_file_;
+  std::string plugin2_path = share_dir + plugin2_file_;
+
   // Set up TRT
-  initializeTRT(depth_weight_file);
+  initializeTRT(weight_file, plugin1_path, plugin2_path);
 
   // Allocate buffers
   cudaError_t err = cudaMallocHost(reinterpret_cast<void **>(&input_host_),
-                                   1 * 6 * resize_h_ * resize_w_ * sizeof(float));
-  cudaMalloc(&buffers_[0], 1 * 3 * resize_h_ * resize_w_ * sizeof(float));
+                                   1 * channels_ * resize_h_ * resize_w_ * sizeof(float));
+  cudaMalloc(&buffers_[0], 1 * channels_ * resize_h_ * resize_w_ * sizeof(float));
   cudaMallocHost(reinterpret_cast<void **>(&output_host_),
-                 1 * 2 * resize_h_ / 4 * resize_w_ / 4 * sizeof(float));
-  cudaMalloc(&buffers_[1], 1 * 2 * resize_h_ / 4 * resize_w_ / 4 * sizeof(float));
+                 1 * 2 * (resize_h_ / 4) * (resize_w_ / 4) * sizeof(float));
+  cudaMalloc(&buffers_[1], 1 * 2 * (resize_h_ / 4) * (resize_w_ / 4) * sizeof(float));
 
   // Create stream
   cudaStreamCreate(&stream_);
@@ -138,8 +143,24 @@ std::vector<float> FlowNet::imageToTensor(const cv::Mat &mat)
   return tensor_data;
 }
 
-void FlowNet::initializeTRT(const std::string &engine_file)
+void FlowNet::initializeTRT(const std::string &engine_file, const std::string &plugin1,
+                            const std::string &plugin2)
 {
+  // --- Load plugin library ---
+  void *handle1 = dlopen(plugin1.c_str(), RTLD_NOW);
+  if(!handle1)
+  {
+    throw std::runtime_error(std::string("Failed to load plugin: ") + dlerror());
+  }
+
+  void *handle2 = dlopen(plugin2.c_str(), RTLD_NOW);
+  if(!handle2)
+  {
+    throw std::runtime_error(std::string("Failed to load plugin2: ") + dlerror());
+  }
+
+  initLibNvInferPlugins(&gLogger, "");
+
   // Load TensorRT engine from file
   std::ifstream file(engine_file, std::ios::binary);
   if(!file)
@@ -209,16 +230,19 @@ void FlowNet::runInference(const cv::Mat &curr, const cv::Mat &prev)
 
   // Copy the result back
   cudaMemcpyAsync(output_host_, buffers_[1],
-                  1 * 2 * resize_h_ / 4 * resize_w_ / 4 * sizeof(float),
+                  1 * 2 * (resize_h_ / 4) * (resize_w_ / 4) * sizeof(float),
                   cudaMemcpyDeviceToHost, stream_);
 
   cudaStreamSynchronize(stream_);
 
-  int output_size = 2 * (resize_h_ / 4) * (resize_w_ / 4);
-  result_.assign(output_host_, output_host_ + output_size);
-
   // Convert to cv::Mat
-  cv::Mat flow_data(resize_h_ / 4, resize_w_ / 4, CV_32FC2, result_.data());
+  int H = resize_h_ / 4;
+  int W = resize_w_ / 4;
+  cv::Mat u(H, W, CV_32FC1, output_host_);
+  cv::Mat v(H, W, CV_32FC1, output_host_ + H * W);
+
+  cv::Mat flow_data;
+  cv::merge(std::vector<cv::Mat>{u, v}, flow_data); // CV_32FC2
 
   // postProcessFlow
   cv::Mat flow_processed = postProcessFlow(flow_data);
@@ -248,6 +272,7 @@ cv::Mat FlowNet::postProcessFlow(const cv::Mat &flow_input)
       f[1] *= scale_y_; // flow y
     }
   }
+
   cv::Mat u(flow_resized.rows, flow_resized.cols, CV_32FC1);
   cv::Mat v(flow_resized.rows, flow_resized.cols, CV_32FC1);
 

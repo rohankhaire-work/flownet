@@ -33,6 +33,7 @@ private:
   cv::Mat curr_image_, prev_image_;
   cv_bridge::CvImagePtr init_image_ptr_;
   std::unique_ptr<FlowNet> flownet_;
+  bool new_image_available_ = false;
 
   // Subscriber
   image_transport::Subscriber image_sub_;
